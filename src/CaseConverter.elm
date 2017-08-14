@@ -16,7 +16,8 @@ toKebab str =
 titleToKebab : String -> String
 titleToKebab titleStr =
     titleStr
-        |> splitByTitle
+        |> splitBy Char.isUpper
+        |> joinNeighboringTitleChars
         |> List.map String.toLower
         |> String.join "-"
 
@@ -25,7 +26,7 @@ isCamel : String -> Bool
 isCamel str =
     let
         hasTitleCasedWords str =
-            List.length (splitByTitle str) > 1
+            List.length (splitBy Char.isUpper str) > 1
 
         isFirstCharLower str =
             String.uncons str
@@ -39,7 +40,7 @@ isTitle : String -> Bool
 isTitle str =
     let
         hasTitleCasedWords str =
-            List.length (splitByTitle str) > 1
+            List.length (splitBy Char.isUpper str) > 1
 
         isFirstCharUpper str =
             String.uncons str
@@ -49,11 +50,11 @@ isTitle str =
     hasTitleCasedWords str && isFirstCharUpper str
 
 
-splitByTitle : String -> List String
-splitByTitle str =
+splitBy : (Char -> Bool) -> String -> List String
+splitBy f str =
     let
-        splitOnTitle char words =
-            if Char.isLower char then
+        splitOnPred char words =
+            if (not << f) char then
                 words
                     |> List.head
                     |> Maybe.map (\x -> x ++ String.fromChar char)
@@ -63,9 +64,8 @@ splitByTitle str =
                 String.fromChar char :: words
     in
     str
-        |> String.foldl splitOnTitle []
+        |> String.foldl splitOnPred []
         |> List.reverse
-        |> joinNeighboringTitleChars
 
 
 joinNeighboringTitleChars : List String -> List String
