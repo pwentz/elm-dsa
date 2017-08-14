@@ -30,5 +30,35 @@ suite =
                             "simple-http-request"
                     in
                     Expect.equal expected (toKebab title)
+            , test "it can convert camel case" <|
+                \_ ->
+                    let
+                        camel =
+                            "someThingVeryAwesome"
+
+                        expected =
+                            "some-thing-very-awesome"
+                    in
+                    Expect.equal expected (toKebab camel)
+            , test "it can support acronyms" <|
+                \_ ->
+                    let
+                        camel =
+                            "simpleHttpRequest"
+
+                        expected =
+                            "simple-http-request"
+                    in
+                    Expect.equal expected (toKebab camel)
+            , test "it can support either style of acronym" <|
+                \_ ->
+                    let
+                        camel =
+                            "simpleHTTPRequest"
+
+                        expected =
+                            "simple-http-request"
+                    in
+                    Expect.equal expected (toKebab camel)
             ]
         ]

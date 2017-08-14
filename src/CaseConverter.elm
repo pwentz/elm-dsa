@@ -7,6 +7,8 @@ toKebab : String -> String
 toKebab str =
     if isTitle str then
         titleToKebab str
+    else if isCamel str then
+        titleToKebab str
     else
         str
 
@@ -17,6 +19,20 @@ titleToKebab titleStr =
         |> splitByTitle
         |> List.map String.toLower
         |> String.join "-"
+
+
+isCamel : String -> Bool
+isCamel str =
+    let
+        hasTitleCasedWords str =
+            List.length (splitByTitle str) > 1
+
+        isFirstCharLower str =
+            String.uncons str
+                |> Maybe.map (Char.isLower << Tuple.first)
+                |> Maybe.withDefault False
+    in
+    hasTitleCasedWords str && isFirstCharLower str
 
 
 isTitle : String -> Bool
