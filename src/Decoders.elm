@@ -1,4 +1,4 @@
-module Decoders exposing (Repo, repoContentsDecoder)
+module Decoders exposing (..)
 
 import Json.Decode as Json
 import Json.Decode.Pipeline as JPipe
@@ -17,6 +17,16 @@ type alias Repo =
     }
 
 
+type alias RepoFile =
+    { name : String
+    , path : String
+    , sha : String
+    , url : String
+    , format : String
+    , code : Maybe String
+    }
+
+
 repoContentsDecoder : Json.Decoder (List Repo)
 repoContentsDecoder =
     Json.list
@@ -31,3 +41,37 @@ repoContentsDecoder =
             |> JPipe.required "download_url" (Json.nullable Json.string)
             |> JPipe.required "type" Json.string
         )
+
+
+repoFileDecoder : Json.Decoder (List RepoFile)
+repoFileDecoder =
+    Json.field "tree" <|
+        Json.list <|
+            Json.map4
+                toRepoFile
+                (Json.field "path" Json.string)
+                (Json.field "sha" Json.string)
+                (Json.field "url" Json.string)
+                (Json.field "type" Json.string)
+
+
+toRepoFile : String -> String -> String -> String -> RepoFile
+toRepoFile path sha url format =
+    let
+        fileName =
+            path
+                |> String.indices "/"
+                |> (List.head << List.reverse)
+                |> Maybe.map
+                    (\n ->
+                        String.dropLeft (n - 1) path
+                    )
+                |> Maybe.withDefault "Unknown"
+    in
+    RepoFile
+        fileName
+        path
+        sha
+        url
+        format
+        Nothing
