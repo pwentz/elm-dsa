@@ -1,18 +1,21 @@
 module Main exposing (..)
 
+import CaseConverter.Main as CaseConverter
 import Decoders exposing (Repo)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
 import Navigation
+import Task
 import UrlParser as Url exposing ((</>))
 
 
 type alias Model =
-    { history : List (Maybe Route)
+    { history : List Route
     , repos : List Repo
     , currentRoute : Route
+    , currentSnippets : List String
     }
 
 
@@ -26,10 +29,11 @@ type Msg
     = GetRepos (Result Http.Error (List Repo))
     | UrlChange Navigation.Location
     | NewUrl String
+    | RepoFiles (Result Http.Error (List (Http.Response String)))
 
 
 view : Model -> Html Msg
-view ({ repos, history, currentRoute } as model) =
+view ({ repos, history, currentRoute, currentSnippets } as model) =
     case currentRoute of
         NotFound ->
             homeView model
@@ -56,6 +60,12 @@ view ({ repos, history, currentRoute } as model) =
                         , button
                             [ onClick (NewUrl "/") ]
                             [ text "Home" ]
+                        , div
+                            []
+                            [ code
+                                []
+                                (List.map (\x -> text x) currentSnippets)
+                            ]
                         ]
 
 
@@ -102,9 +112,11 @@ init : Navigation.Location -> ( Model, Cmd Msg )
 init location =
     let
         parsedRoute =
-            Url.parsePath route location
+            location
+                |> Url.parsePath route
+                |> Maybe.withDefault Home
     in
-    ( Model [ parsedRoute ] [] (Maybe.withDefault Home parsedRoute)
+    ( Model [ parsedRoute ] [] parsedRoute []
     , getRepos
     )
 
@@ -129,6 +141,73 @@ getRepos =
     Http.send GetRepos request
 
 
+getRouteDetails : Route -> Model -> Cmd Msg
+getRouteDetails route model =
+    case route of
+        Home ->
+            Cmd.none
+
+        NotFound ->
+            Cmd.none
+
+        Algorithms routeName ->
+            let
+                url =
+                    "https://api.github.com/repos/pwentz/dsa-practice/contents/" ++ routeName ++ "/"
+
+                request =
+                    Http.get url Decoders.repoContentsDecoder
+            in
+            request
+                |> Http.toTask
+                |> Task.andThen
+                    (\repoContents ->
+                        let
+                            toRequest url =
+                                Http.get url Decoders.repoContentsDecoder
+                        in
+                        repoContents
+                            |> List.map (Http.toTask << toRequest << .url)
+                            |> Task.sequence
+                    )
+                |> Task.andThen
+                    (\responses ->
+                        let
+                            toRequest { url } =
+                                Http.get url Decoders.repoContentsDecoder
+
+                            hasFiles { name } =
+                                String.contains "src" name
+                                    || String.contains "Sources" name
+                        in
+                        responses
+                            |> List.concat
+                            |> List.filter hasFiles
+                            |> List.map (Http.toTask << toRequest)
+                            |> Task.sequence
+                    )
+                |> Task.andThen
+                    (\repoData ->
+                        let
+                            toRequest { url } =
+                                Http.request
+                                    { method = "GET"
+                                    , headers = [ Http.header "Accept" "application/vnd.github.VERSION.raw" ]
+                                    , url = url
+                                    , body = Http.emptyBody
+                                    , expect = Http.expectStringResponse Ok
+                                    , timeout = Nothing
+                                    , withCredentials = False
+                                    }
+                        in
+                        repoData
+                            |> List.concat
+                            |> List.map (Http.toTask << toRequest)
+                            |> Task.sequence
+                    )
+                |> Task.attempt RepoFiles
+
+
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
@@ -139,14 +218,16 @@ update msg model =
 
         UrlChange location ->
             let
-                newLocation =
-                    Url.parsePath route location
+                nextRoute =
+                    location
+                        |> Url.parsePath route
+                        |> Maybe.withDefault NotFound
             in
             ( { model
-                | history = newLocation :: model.history
-                , currentRoute = Maybe.withDefault NotFound newLocation
+                | history = nextRoute :: model.history
+                , currentRoute = nextRoute
               }
-            , Cmd.none
+            , getRouteDetails nextRoute model
             )
 
         GetRepos (Err _) ->
@@ -159,3 +240,9 @@ update msg model =
                         |> List.filter (not << String.contains "." << .name)
             in
             ( { model | repos = dsaRepos }, Cmd.none )
+
+        RepoFiles (Err _) ->
+            ( model, Cmd.none )
+
+        RepoFiles (Ok snippets) ->
+            ( { model | currentSnippets = List.map .body snippets }, Cmd.none )

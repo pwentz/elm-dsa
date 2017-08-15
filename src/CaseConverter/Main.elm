@@ -1,6 +1,6 @@
-module Main exposing (toCamel, toKebab, toSnake, toTitle)
+module CaseConverter.Main exposing (toCamel, toKebab, toSnake, toTitle)
 
-import Utils
+import CaseConverter.Utils as Utils
 
 
 type Cased
@@ -66,18 +66,18 @@ toCamel str =
     case toCased str of
         Title str ->
             str
-                |> Utils.mapWords (Utils.onPrefix String.toLower)
+                |> Utils.mapWords (Utils.mapFirst String.toLower)
 
         Snake str ->
             Utils.splitOn '_' str
-                |> List.map (Utils.onPrefix String.toUpper << String.toLower)
+                |> List.map (Utils.mapFirst String.toUpper << String.toLower)
                 |> String.concat
-                |> Utils.onPrefix String.toLower
+                |> Utils.mapFirst String.toLower
 
         Kebab str ->
             str
                 |> Utils.toTitleWithSeparator '-'
-                |> Utils.onPrefix String.toLower
+                |> Utils.mapFirst String.toLower
 
         Camel str ->
             str
@@ -96,7 +96,9 @@ toSnake str =
             Utils.fromTitleWithSeparator '_' str
 
         Kebab str ->
-            Utils.replaceSeparators ( '-', '_' ) str
+            str
+                |> String.toLower
+                |> Utils.replaceAll ( '-', '_' )
 
         Snake str ->
             str
@@ -115,7 +117,9 @@ toKebab str =
             Utils.fromTitleWithSeparator '-' str
 
         Snake str ->
-            Utils.replaceSeparators ( '_', '-' ) str
+            str
+                |> String.toLower
+                |> Utils.replaceAll ( '_', '-' )
 
         Kebab str ->
             str
@@ -129,7 +133,7 @@ toTitle str =
     case toCased str of
         Camel str ->
             str
-                |> Utils.mapWords (Utils.onPrefix String.toUpper)
+                |> Utils.mapWords (Utils.mapFirst String.toUpper)
 
         Kebab str ->
             Utils.toTitleWithSeparator '-' str

@@ -1,18 +1,19 @@
-module Utils
+module CaseConverter.Utils
     exposing
         ( fromTitleWithSeparator
         , isCamel
         , isKebab
         , isSnake
         , isTitle
+        , mapFirst
         , mapWords
-        , onPrefix
-        , replaceSeparators
+        , replaceAll
         , splitOn
         , toTitleWithSeparator
         )
 
 import Char
+import Regex
 
 
 splitBy : (Char -> Bool) -> String -> List String
@@ -22,8 +23,11 @@ splitBy f str =
             if (not << f) char then
                 words
                     |> List.head
-                    |> Maybe.map (\x -> x ++ String.fromChar char)
-                    |> Maybe.map (\x -> x :: List.drop 1 words)
+                    |> Maybe.map (\first -> first ++ String.fromChar char)
+                    |> Maybe.map
+                        (\updatedFirst ->
+                            updatedFirst :: List.drop 1 words
+                        )
                     |> Maybe.withDefault [ String.fromChar char ]
             else
                 String.fromChar char :: words
@@ -36,17 +40,33 @@ splitBy f str =
 isKebab : String -> Bool
 isKebab str =
     let
-        words =
+        strictlyAlphanumeric str =
+            str
+                |> Regex.find Regex.All (Regex.regex "[^a-zA-Z0-9]")
+                |> List.filter (not << (==) "-" << .match)
+                |> List.isEmpty
+
+        isLowerCased str =
             splitOn '-' str
+                |> List.all (\x -> String.toLower x == x)
     in
-    List.length words > 1 && List.all (\x -> String.toLower x == x) words
+    String.contains "-" str
+        && isLowerCased str
+        && strictlyAlphanumeric str
+
+
+hasTitleCasedWords : String -> Bool
+hasTitleCasedWords str =
+    List.length (splitBy Char.isUpper str) > 1
 
 
 isCamel : String -> Bool
 isCamel str =
     let
-        hasTitleCasedWords str =
-            List.length (splitBy Char.isUpper str) > 1
+        strictlyAlphanumeric str =
+            Regex.contains
+                (Regex.regex "([^a-zA-Z0-9]|_)")
+                str
 
         isFirstCharLower str =
             String.uncons str
@@ -55,15 +75,16 @@ isCamel str =
     in
     hasTitleCasedWords str
         && isFirstCharLower str
-        && (not << String.contains "_") str
+        && (not << strictlyAlphanumeric) str
 
 
 isTitle : String -> Bool
 isTitle str =
     let
-        containsSpecialChars str =
-            String.contains "_" str
-                || String.contains "-" str
+        strictlyAlphanumeric str =
+            Regex.contains
+                (Regex.regex "([^a-zA-Z0-9]|_)")
+                str
 
         hasTitleCasedWords str =
             List.length (splitBy Char.isUpper str) > 1
@@ -75,17 +96,25 @@ isTitle str =
     in
     hasTitleCasedWords str
         && isFirstCharUpper str
-        && (not << containsSpecialChars) str
+        && (not << strictlyAlphanumeric) str
 
 
 isSnake : String -> Bool
 isSnake str =
     let
+        strictlyAlphanumeric str =
+            str
+                |> Regex.find Regex.All (Regex.regex "[^a-zA-Z0-9]")
+                |> List.filter (not << (==) "_" << .match)
+                |> List.isEmpty
+
         isMonocased x =
             (String.toUpper x == x)
                 || (String.toLower x == x)
     in
-    List.length (splitOn '_' str) > 1 && isMonocased str
+    String.contains "_" str
+        && isMonocased str
+        && strictlyAlphanumeric str
 
 
 splitOn : Char -> String -> List String
@@ -102,8 +131,8 @@ unconsBy f str =
         str
 
 
-onPrefix : (String -> String) -> String -> String
-onPrefix f str =
+mapFirst : (String -> String) -> String -> String
+mapFirst f str =
     let
         prefix =
             String.left 1 str
@@ -164,13 +193,12 @@ toTitleWithSeparator : Char -> String -> String
 toTitleWithSeparator separator =
     mapWords
         (splitOn separator
-            >> List.map (onPrefix String.toUpper)
+            >> List.map (mapFirst String.toUpper)
             >> String.concat
         )
 
 
-replaceSeparators : ( Char, Char ) -> String -> String
-replaceSeparators ( oldSep, newSep ) =
+replaceAll : ( Char, Char ) -> String -> String
+replaceAll ( oldSep, newSep ) =
     splitOn oldSep
-        >> List.map String.toLower
         >> String.join (String.fromChar newSep)
