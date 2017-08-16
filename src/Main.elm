@@ -1,6 +1,6 @@
 module Main exposing (..)
 
-import CaseConverter.Main as CaseConverter
+import Array
 import Decoders exposing (Repo, RepoFile)
 import Dict exposing (Dict)
 import Html exposing (..)
@@ -32,6 +32,7 @@ type Msg
     = GetRepos (Result Http.Error (List Repo))
     | UrlChange Navigation.Location
     | NewUrl String
+    | NewAlgoUrl String
     | RepoFiles (Result Http.Error (List RepoFile))
     | RepoFilesCode (Result Http.Error (List (Http.Response String)))
 
@@ -99,7 +100,7 @@ toRoute repoName =
         url =
             "/algorithms/" ++ repoName
     in
-    li [] [ button [ onClick (NewUrl url) ] [ text repoName ] ]
+    li [] [ button [ onClick (NewAlgoUrl url) ] [ text repoName ] ]
 
 
 main =
@@ -150,54 +151,56 @@ getRepos =
     Http.send GetRepos request
 
 
+nthChunk : Int -> String -> String
+nthChunk n str =
+    str
+        |> Regex.split Regex.All (Regex.regex "/")
+        |> List.filter (not << String.isEmpty)
+        |> Array.fromList
+        |> Array.get n
+        |> Maybe.withDefault str
+
+
 fileExtensions : List String
 fileExtensions =
     [ ".clj", ".swift", ".md" ]
 
 
-getRouteDetails : Model -> Cmd Msg
-getRouteDetails model =
-    case model.currentRoute of
-        Home ->
+getRouteDetails : String -> Model -> Cmd Msg
+getRouteDetails repoName model =
+    let
+        currentRepoSha =
+            model.repos
+                |> List.filter ((==) repoName << .name)
+                |> List.head
+                |> Maybe.map .sha
+    in
+    case currentRepoSha of
+        Nothing ->
             Cmd.none
 
-        NotFound ->
-            Cmd.none
-
-        Algorithms routeName ->
+        Just sha ->
             let
-                currentRepoSha =
-                    model.repos
-                        |> List.filter ((==) routeName << .name)
-                        |> List.head
-                        |> Maybe.map .sha
+                url =
+                    "https://api.github.com/repos/pwentz/dsa-practice/git/trees/" ++ sha ++ "?recursive=1"
+
+                request =
+                    Http.get url Decoders.repoFileDecoder
+
+                filterFiles files =
+                    files
+                        |> List.filter
+                            (\file ->
+                                (file.format == "blob")
+                                    && (not << String.contains "test" << String.toLower) file.path
+                                    && (not << String.contains "spec" << String.toLower) file.path
+                                    && List.any (\x -> String.endsWith x file.path) fileExtensions
+                            )
             in
-            case currentRepoSha of
-                Nothing ->
-                    Cmd.none
-
-                Just sha ->
-                    let
-                        url =
-                            "https://api.github.com/repos/pwentz/dsa-practice/git/trees/" ++ sha ++ "?recursive=1"
-
-                        request =
-                            Http.get url Decoders.repoFileDecoder
-
-                        filterFiles files =
-                            files
-                                |> List.filter
-                                    (\file ->
-                                        (file.format == "blob")
-                                            && (not << String.contains "test" << String.toLower) file.path
-                                            && (not << String.contains "spec" << String.toLower) file.path
-                                            && List.any (\x -> String.endsWith x file.path) fileExtensions
-                                    )
-                    in
-                    request
-                        |> Http.toTask
-                        |> Task.map filterFiles
-                        |> Task.attempt RepoFiles
+            request
+                |> Http.toTask
+                |> Task.map filterFiles
+                |> Task.attempt RepoFiles
 
 
 fetchCode : Model -> Cmd Msg
@@ -211,11 +214,14 @@ fetchCode model =
 
         Algorithms repoName ->
             let
-                toRequest path =
+                toRequest url =
                     Http.request
                         { method = "GET"
                         , headers = [ Http.header "Accept" "application/vnd.github.VERSION.raw" ]
-                        , url = "https://api.github.com/repos/pwentz/dsa-practice/contents/" ++ path
+                        , url = url
+
+                        -- , headers = [ Http.header "Accept" "application/vnd.github.VERSION.html" ]
+                        -- , url = "https://api.github.com/repos/pwentz/dsa-practice/contents/" ++ repoName ++ "/" ++ path
                         , body = Http.emptyBody
                         , expect = Http.expectStringResponse Ok
                         , timeout = Nothing
@@ -228,7 +234,7 @@ fetchCode model =
                         |> Maybe.withDefault []
             in
             filesToFetch
-                |> List.map (Http.toTask << toRequest << .path)
+                |> List.map (Http.toTask << toRequest << .url)
                 |> Task.sequence
                 |> Task.attempt RepoFilesCode
 
@@ -236,6 +242,29 @@ fetchCode model =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        NewAlgoUrl url ->
+            let
+                repoName =
+                    nthChunk 1 url
+
+                hasVisited =
+                    model.repoFiles
+                        |> Dict.get repoName
+            in
+            case hasVisited of
+                Nothing ->
+                    ( model
+                    , Cmd.batch
+                        [ getRouteDetails repoName model
+                        , Navigation.newUrl url
+                        ]
+                    )
+
+                Just files ->
+                    ( { model | currentSnippets = List.filterMap .code files }
+                    , Navigation.newUrl url
+                    )
+
         NewUrl url ->
             ( model
             , Navigation.newUrl url
@@ -252,7 +281,7 @@ update msg model =
                 | history = nextRoute :: model.history
                 , currentRoute = nextRoute
               }
-            , getRouteDetails model
+            , Cmd.none
             )
 
         GetRepos (Err _) ->
@@ -270,28 +299,26 @@ update msg model =
             ( model, Cmd.none )
 
         RepoFiles (Ok files) ->
-            case files of
-                [] ->
+            case model.currentRoute of
+                Home ->
                     model ! []
 
-                (file :: _) as files ->
+                NotFound ->
+                    model ! []
+
+                Algorithms repoName ->
                     let
-                        getParent files =
-                            file.path
-                                |> Regex.find Regex.All (Regex.regex "/")
-                                |> List.head
-                                |> Maybe.map ((\idx -> String.left idx file.path) << .index)
-                                |> Debug.log "update with repo file: "
-                                |> Maybe.withDefault "Unknown"
+                        updatedModel =
+                            { model
+                                | repoFiles =
+                                    Dict.insert
+                                        repoName
+                                        files
+                                        model.repoFiles
+                            }
                     in
-                    ( { model
-                        | repoFiles =
-                            Dict.insert
-                                (getParent files)
-                                files
-                                model.repoFiles
-                      }
-                    , fetchCode model
+                    ( updatedModel
+                    , fetchCode updatedModel
                     )
 
         RepoFilesCode (Err _) ->
@@ -307,16 +334,12 @@ update msg model =
 
                 Algorithms repoName ->
                     let
-                        filesToUpdate =
-                            model.repoFiles
-                                |> Dict.get repoName
-                                |> Maybe.withDefault []
-
                         updateFile code file =
                             { file | code = Just code.body }
                     in
                     ( { model
-                        | repoFiles =
+                        | currentSnippets = List.map .body codeFromFiles
+                        , repoFiles =
                             Dict.update
                                 repoName
                                 (Maybe.map (List.map2 updateFile codeFromFiles))

@@ -2,6 +2,7 @@ module Decoders exposing (..)
 
 import Json.Decode as Json
 import Json.Decode.Pipeline as JPipe
+import Regex
 
 
 type alias Repo =
@@ -60,13 +61,9 @@ toRepoFile path sha url format =
     let
         fileName =
             path
-                |> String.indices "/"
+                |> Regex.split Regex.All (Regex.regex "/")
                 |> (List.head << List.reverse)
-                |> Maybe.map
-                    (\n ->
-                        String.dropLeft (n - 1) path
-                    )
-                |> Maybe.withDefault "Unknown"
+                |> Maybe.withDefault path
     in
     RepoFile
         fileName
