@@ -1,7 +1,7 @@
 module Main exposing (..)
 
 import Array
-import Decoders exposing (Repo, RepoFile)
+import Decoders
 import Dict exposing (Dict)
 import Html exposing (..)
 import Html.Attributes exposing (..)
@@ -9,16 +9,15 @@ import Html.Events exposing (..)
 import Http
 import Navigation
 import Regex
+import Repos exposing (Repo, Repos)
 import Task
 import UrlParser as Url exposing ((</>))
 
 
 type alias Model =
     { history : List Route
-    , repos : List Repo
+    , repos : Repos
     , currentRoute : Route
-    , currentSnippets : List String
-    , repoFiles : Dict String (List RepoFile)
     }
 
 
@@ -33,35 +32,37 @@ type Msg
     | UrlChange Navigation.Location
     | NewUrl String
     | NewAlgoUrl String
-    | RepoFiles (Result Http.Error (List RepoFile))
+    | RepoFiles (Result Http.Error (List Repos.Child))
     | RepoFilesCode (Result Http.Error (List (Http.Response String)))
 
 
 view : Model -> Html Msg
-view ({ repos, history, currentRoute, currentSnippets } as model) =
-    case currentRoute of
+view model =
+    case model.currentRoute of
         NotFound ->
-            homeView model
+            notFoundView
 
         Home ->
             homeView model
 
         Algorithms repoPath ->
-            let
-                currentRepo =
-                    repos
-                        |> List.filter ((==) repoPath << .name)
-            in
-            case currentRepo of
-                [] ->
+            case Repos.getRepo repoPath model.repos of
+                Nothing ->
                     notFoundView
 
-                repo :: _ ->
+                Just repo ->
+                    let
+                        codeSnippets =
+                            repo
+                                |> Repos.children
+                                |> List.filterMap .code
+                                |> List.map text
+                    in
                     div
                         []
                         [ h1
                             []
-                            [ (text << .name) repo ]
+                            [ (text << Repos.name) repo ]
                         , button
                             [ onClick (NewUrl "/") ]
                             [ text "Home" ]
@@ -69,7 +70,7 @@ view ({ repos, history, currentRoute, currentSnippets } as model) =
                             []
                             [ code
                                 []
-                                (List.map (\x -> text x) currentSnippets)
+                                codeSnippets
                             ]
                         ]
 
@@ -90,7 +91,7 @@ homeView { repos } =
         []
         [ ul
             []
-            (List.map (toRoute << .name) repos)
+            (List.map (toRoute << Tuple.first) (Repos.all repos))
         ]
 
 
@@ -122,10 +123,8 @@ init location =
                 |> Maybe.withDefault Home
     in
     ( { history = [ parsedRoute ]
-      , repos = []
+      , repos = Repos.empty
       , currentRoute = parsedRoute
-      , currentSnippets = []
-      , repoFiles = Dict.empty
       }
     , getRepos
     )
@@ -151,16 +150,6 @@ getRepos =
     Http.send GetRepos request
 
 
-nthChunk : Int -> String -> String
-nthChunk n str =
-    str
-        |> Regex.split Regex.All (Regex.regex "/")
-        |> List.filter (not << String.isEmpty)
-        |> Array.fromList
-        |> Array.get n
-        |> Maybe.withDefault str
-
-
 fileExtensions : List String
 fileExtensions =
     [ ".clj", ".swift", ".md" ]
@@ -171,9 +160,8 @@ getRouteDetails repoName model =
     let
         currentRepoSha =
             model.repos
-                |> List.filter ((==) repoName << .name)
-                |> List.head
-                |> Maybe.map .sha
+                |> Repos.getRepo repoName
+                |> Maybe.map Repos.sha
     in
     case currentRepoSha of
         Nothing ->
@@ -186,21 +174,8 @@ getRouteDetails repoName model =
 
                 request =
                     Http.get url Decoders.repoFileDecoder
-
-                filterFiles files =
-                    files
-                        |> List.filter
-                            (\file ->
-                                (file.format == "blob")
-                                    && (not << String.contains "test" << String.toLower) file.path
-                                    && (not << String.contains "spec" << String.toLower) file.path
-                                    && List.any (\x -> String.endsWith x file.path) fileExtensions
-                            )
             in
-            request
-                |> Http.toTask
-                |> Task.map filterFiles
-                |> Task.attempt RepoFiles
+            Http.send RepoFiles request
 
 
 fetchCode : Model -> Cmd Msg
@@ -229,8 +204,9 @@ fetchCode model =
                         }
 
                 filesToFetch =
-                    model.repoFiles
-                        |> Dict.get repoName
+                    model.repos
+                        |> Repos.getRepo repoName
+                        |> Maybe.map Repos.children
                         |> Maybe.withDefault []
             in
             filesToFetch
@@ -244,24 +220,22 @@ update msg model =
     case msg of
         NewAlgoUrl url ->
             let
-                repoName =
-                    nthChunk 1 url
-
                 hasVisited =
-                    model.repoFiles
-                        |> Dict.get repoName
+                    model.repos
+                        |> Repos.getRepo url
+                        |> Maybe.andThen (List.head << Repos.children)
             in
             case hasVisited of
                 Nothing ->
                     ( model
                     , Cmd.batch
-                        [ getRouteDetails repoName model
+                        [ getRouteDetails url model
                         , Navigation.newUrl url
                         ]
                     )
 
-                Just files ->
-                    ( { model | currentSnippets = List.filterMap .code files }
+                Just _ ->
+                    ( model
                     , Navigation.newUrl url
                     )
 
@@ -288,12 +262,7 @@ update msg model =
             ( model, Cmd.none )
 
         GetRepos (Ok repos) ->
-            let
-                dsaRepos =
-                    repos
-                        |> List.filter (not << String.contains "." << .name)
-            in
-            ( { model | repos = dsaRepos }, Cmd.none )
+            ( { model | repos = Repos.fromList repos }, Cmd.none )
 
         RepoFiles (Err _) ->
             ( model, Cmd.none )
@@ -308,13 +277,21 @@ update msg model =
 
                 Algorithms repoName ->
                     let
+                        dropWith file =
+                            (file.format /= "blob")
+                                || (String.contains "test" << String.toLower) file.path
+                                || (String.contains "spec" << String.toLower) file.path
+                                || not (List.any (\x -> String.endsWith x file.path) fileExtensions)
+
                         updatedModel =
                             { model
-                                | repoFiles =
-                                    Dict.insert
-                                        repoName
-                                        files
-                                        model.repoFiles
+                                | repos =
+                                    model.repos
+                                        |> Repos.updateRepo repoName
+                                            (Maybe.map <|
+                                                Repos.dropChildren dropWith
+                                                    << Repos.addChildren files
+                                            )
                             }
                     in
                     ( updatedModel
@@ -324,7 +301,7 @@ update msg model =
         RepoFilesCode (Err _) ->
             model ! []
 
-        RepoFilesCode (Ok codeFromFiles) ->
+        RepoFilesCode (Ok responses) ->
             case model.currentRoute of
                 Home ->
                     model ! []
@@ -333,17 +310,14 @@ update msg model =
                     model ! []
 
                 Algorithms repoName ->
-                    let
-                        updateFile code file =
-                            { file | code = Just code.body }
-                    in
                     ( { model
-                        | currentSnippets = List.map .body codeFromFiles
-                        , repoFiles =
-                            Dict.update
-                                repoName
-                                (Maybe.map (List.map2 updateFile codeFromFiles))
-                                model.repoFiles
+                        | repos =
+                            model.repos
+                                |> Repos.updateRepo repoName
+                                    (Maybe.andThen <|
+                                        Result.toMaybe
+                                            << Repos.addCodeToChildren (List.map .body responses)
+                                    )
                       }
                     , Cmd.none
                     )
