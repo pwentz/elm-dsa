@@ -1,7 +1,8 @@
-module Decoders exposing (Repo, repoContentsDecoder)
+module Decoders exposing (..)
 
 import Json.Decode as Json
 import Json.Decode.Pipeline as JPipe
+import Regex
 
 
 type alias Repo =
@@ -14,6 +15,16 @@ type alias Repo =
     , gitUrl : String
     , downloadUrl : Maybe String
     , typeOf : String
+    }
+
+
+type alias RepoFile =
+    { name : String
+    , path : String
+    , sha : String
+    , url : String
+    , format : String
+    , code : Maybe String
     }
 
 
@@ -31,3 +42,33 @@ repoContentsDecoder =
             |> JPipe.required "download_url" (Json.nullable Json.string)
             |> JPipe.required "type" Json.string
         )
+
+
+repoFileDecoder : Json.Decoder (List RepoFile)
+repoFileDecoder =
+    Json.field "tree" <|
+        Json.list <|
+            Json.map4
+                toRepoFile
+                (Json.field "path" Json.string)
+                (Json.field "sha" Json.string)
+                (Json.field "url" Json.string)
+                (Json.field "type" Json.string)
+
+
+toRepoFile : String -> String -> String -> String -> RepoFile
+toRepoFile path sha url format =
+    let
+        fileName =
+            path
+                |> Regex.split Regex.All (Regex.regex "/")
+                |> (List.head << List.reverse)
+                |> Maybe.withDefault path
+    in
+    RepoFile
+        fileName
+        path
+        sha
+        url
+        format
+        Nothing
