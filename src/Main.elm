@@ -7,11 +7,13 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
+import Json.Encode as Encode
 import Navigation
 import Regex
 import Repos exposing (Repo, Repos)
+import Secrets
 import Task
-import UrlParser as Url exposing ((</>))
+import UrlParser as Url exposing ((</>), (<?>))
 
 
 type alias Model =
@@ -23,7 +25,7 @@ type alias Model =
 
 type Route
     = Home
-    | Algorithms String
+    | Algorithms String (Maybe String)
     | NotFound
 
 
@@ -45,7 +47,7 @@ view model =
         Home ->
             homeView model
 
-        Algorithms repoPath ->
+        Algorithms repoPath currentFile ->
             case Repos.getRepo repoPath model.repos of
                 Nothing ->
                     notFoundView
@@ -54,9 +56,52 @@ view model =
                     let
                         codeSnippets =
                             repo
-                                |> Repos.children
-                                |> List.filterMap .code
-                                |> List.map text
+                                |> Repos.codeByChild
+
+                        fileToRender =
+                            currentFile
+                                |> Maybe.map String.toLower
+
+                        fileExtension =
+                            currentFile
+                                |> Maybe.map (Regex.split Regex.All (Regex.regex "\\."))
+                                |> Maybe.andThen (List.head << List.reverse)
+                                |> Maybe.withDefault ""
+
+                        buttons =
+                            codeSnippets
+                                |> List.map Tuple.first
+                                |> List.map
+                                    (\fileName ->
+                                        div
+                                            []
+                                            [ button
+                                                [ onClick (NewUrl (buildUrl [ Repos.name repo ] ((Just << (++) "file=") fileName))) ]
+                                                [ text fileName ]
+                                            ]
+                                    )
+
+                        toRender =
+                            codeSnippets
+                                |> List.filter ((==) (Maybe.withDefault "readme.md" fileToRender) << String.toLower << Tuple.first)
+                                |> List.map Tuple.second
+                                |> List.head
+                                |> Maybe.map
+                                    (\c ->
+                                        div
+                                            []
+                                            [ pre
+                                                []
+                                                [ code
+                                                    [ class ("language-" ++ fileExtension) ]
+                                                    [ text c ]
+                                                ]
+                                            ]
+                                    )
+                                |> Maybe.withDefault (div [] [])
+
+                        _ =
+                            Debug.log "PATH: " currentFile
                     in
                     div
                         []
@@ -68,11 +113,26 @@ view model =
                             [ text "Home" ]
                         , div
                             []
-                            [ code
-                                []
-                                codeSnippets
+                            buttons
+                        , div
+                            []
+                            [ toRender
                             ]
                         ]
+
+
+buildUrl : List String -> Maybe String -> String
+buildUrl chunks params =
+    let
+        url =
+            chunks
+                |> String.join "/"
+                |> (++) "/algorithms/"
+    in
+    params
+        |> Maybe.map ((++) "?")
+        |> Maybe.map ((++) url)
+        |> Maybe.withDefault ""
 
 
 notFoundView : Html Msg
@@ -134,7 +194,7 @@ route : Url.Parser (Route -> a) a
 route =
     Url.oneOf
         [ Url.map Home Url.top
-        , Url.map Algorithms (Url.s "algorithms" </> Url.string)
+        , Url.map Algorithms (Url.s "algorithms" </> Url.string <?> Url.stringParam "file")
         ]
 
 
@@ -142,7 +202,10 @@ getRepos : Cmd Msg
 getRepos =
     let
         url =
-            "https://api.github.com/repos/pwentz/dsa-practice/contents/"
+            "https://api.github.com/repos/pwentz/dsa-practice/contents?client_id="
+                ++ Secrets.githubClientId
+                ++ "&client_secret="
+                ++ Secrets.githubClientSecret
 
         request =
             Http.get url Decoders.repoContentsDecoder
@@ -170,7 +233,12 @@ getRouteDetails repoName model =
         Just sha ->
             let
                 url =
-                    "https://api.github.com/repos/pwentz/dsa-practice/git/trees/" ++ sha ++ "?recursive=1"
+                    "https://api.github.com/repos/pwentz/dsa-practice/git/trees/"
+                        ++ sha
+                        ++ "?recursive=1&client_id="
+                        ++ Secrets.githubClientId
+                        ++ "&client_secret="
+                        ++ Secrets.githubClientSecret
 
                 request =
                     Http.get url Decoders.repoFileDecoder
@@ -187,13 +255,18 @@ fetchCode model =
         NotFound ->
             Cmd.none
 
-        Algorithms repoName ->
+        Algorithms repoName _ ->
             let
                 toRequest url =
                     Http.request
                         { method = "GET"
                         , headers = [ Http.header "Accept" "application/vnd.github.VERSION.raw" ]
-                        , url = url
+                        , url =
+                            url
+                                ++ "?client_id="
+                                ++ Secrets.githubClientId
+                                ++ "&client_secret="
+                                ++ Secrets.githubClientSecret
 
                         -- , headers = [ Http.header "Accept" "application/vnd.github.VERSION.html" ]
                         -- , url = "https://api.github.com/repos/pwentz/dsa-practice/contents/" ++ repoName ++ "/" ++ path
@@ -275,7 +348,7 @@ update msg model =
                 NotFound ->
                     model ! []
 
-                Algorithms repoName ->
+                Algorithms repoName _ ->
                     let
                         dropWith file =
                             (file.format /= "blob")
@@ -309,7 +382,7 @@ update msg model =
                 NotFound ->
                     model ! []
 
-                Algorithms repoName ->
+                Algorithms repoName _ ->
                     ( { model
                         | repos =
                             model.repos
