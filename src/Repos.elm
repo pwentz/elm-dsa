@@ -16,10 +16,12 @@ module Repos
         , initRepo
         , name
         , sha
+        , updateReadme
         , updateRepo
         )
 
 import Dict exposing (Dict)
+import Readme exposing (Readme)
 import Regex
 
 
@@ -60,7 +62,7 @@ all (Repos repos) =
 fromList : List Repo -> Repos
 fromList repos =
     repos
-        |> List.map2 (,) (List.map (\(Repo { name } _) -> name) repos)
+        |> List.map2 (,) (List.map name repos)
         |> Dict.fromList
         |> Repos
 
@@ -73,8 +75,14 @@ getRepo route (Repos repos) =
 
 updateRepo : String -> (Maybe Repo -> Maybe Repo) -> Repos -> Repos
 updateRepo route f (Repos repos) =
-    Repos <|
-        Dict.update (nameFromPath route) f repos
+    Repos
+        (Dict.update (nameFromPath route) f repos)
+
+
+updateReadme : Maybe Readme -> Repos -> Repos
+updateReadme readme (Repos repos) =
+    Repos
+        repos
 
 
 nameFromPath : String -> String

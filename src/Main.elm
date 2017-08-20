@@ -9,6 +9,7 @@ import Html.Events exposing (..)
 import Http
 import Json.Encode as Encode
 import Navigation
+import Readme exposing (Readme)
 import Regex
 import Repos exposing (Repo, Repos)
 import Secrets
@@ -16,9 +17,13 @@ import Task
 import UrlParser as Url exposing ((</>), (<?>))
 
 
+-- TODO:
+-- GET README GIT URL FROM REQUEST IN GET_REPOS AND FETCH CONTENTS
+
+
 type alias Model =
     { history : List Route
-    , repos : Repos
+    , repos : ( Maybe Readme, Repos )
     , currentRoute : Route
     }
 
@@ -30,12 +35,22 @@ type Route
 
 
 type Msg
-    = GetRepos (Result Http.Error (List Repo))
+    = GetRepos (Result Http.Error ( Maybe Readme, List Repo ))
     | UrlChange Navigation.Location
     | NewUrl String
     | NewAlgoUrl String
     | RepoFiles (Result Http.Error (List Repos.Child))
-    | RepoFilesCode (Result Http.Error (List (Http.Response String)))
+    | RepoFilesCode (Result Http.Error (List String))
+
+
+algoRouteWithDefault : (String -> a) -> a -> Route -> a
+algoRouteWithDefault f defaultVal route =
+    case route of
+        Algorithms repoName _ ->
+            f repoName
+
+        _ ->
+            defaultVal
 
 
 view : Model -> Html Msg
@@ -48,7 +63,7 @@ view model =
             homeView model
 
         Algorithms repoPath currentFile ->
-            case Repos.getRepo repoPath model.repos of
+            case Repos.getRepo repoPath ((Tuple.second << .repos) model) of
                 Nothing ->
                     notFoundView
 
@@ -76,7 +91,7 @@ view model =
                                         div
                                             []
                                             [ button
-                                                [ onClick (NewUrl (buildUrl [ Repos.name repo ] ((Just << (++) "file=") fileName))) ]
+                                                [ onClick (NewUrl (buildAlgoUrl [ Repos.name repo ] ((Just << (++) "file=") fileName))) ]
                                                 [ text fileName ]
                                             ]
                                     )
@@ -121,8 +136,8 @@ view model =
                         ]
 
 
-buildUrl : List String -> Maybe String -> String
-buildUrl chunks params =
+buildAlgoUrl : List String -> Maybe String -> String
+buildAlgoUrl chunks params =
     let
         url =
             chunks
@@ -147,11 +162,33 @@ notFoundView =
 
 homeView : Model -> Html Msg
 homeView { repos } =
+    let
+        contents =
+            Tuple.first repos
+                |> Maybe.andThen Readme.code
+                |> Maybe.map
+                    (\md ->
+                        div
+                            []
+                            [ pre
+                                [ class "language-markdown" ]
+                                [ code
+                                    []
+                                    [ text md ]
+                                ]
+                            ]
+                    )
+                |> Maybe.withDefault (div [] [])
+    in
     div
         []
         [ ul
             []
-            (List.map (toRoute << Tuple.first) (Repos.all repos))
+            (List.map (toRoute << Tuple.first) ((Repos.all << Tuple.second) repos))
+        , div
+            []
+            [ contents
+            ]
         ]
 
 
@@ -183,7 +220,7 @@ init location =
                 |> Maybe.withDefault Home
     in
     ( { history = [ parsedRoute ]
-      , repos = Repos.empty
+      , repos = ( Nothing, Repos.empty )
       , currentRoute = parsedRoute
       }
     , getRepos
@@ -200,17 +237,23 @@ route =
 
 getRepos : Cmd Msg
 getRepos =
-    let
-        url =
-            "https://api.github.com/repos/pwentz/dsa-practice/contents?client_id="
-                ++ Secrets.githubClientId
-                ++ "&client_secret="
-                ++ Secrets.githubClientSecret
-
-        request =
-            Http.get url Decoders.repoContentsDecoder
-    in
-    Http.send GetRepos request
+    "https://api.github.com/repos/pwentz/dsa-practice/contents"
+        |> flip Http.get Decoders.repoContentsDecoder
+        |> Http.toTask
+        |> Task.andThen
+            (\(( readme, repos ) as payload) ->
+                readme
+                    |> Maybe.map
+                        (\rdme ->
+                            rdme
+                                |> (codeRequest << Readme.url)
+                                |> Http.toTask
+                                |> Task.map
+                                    (flip (,) repos << Just << flip Readme.updateCode rdme)
+                        )
+                    |> Maybe.withDefault (Task.succeed payload)
+            )
+        |> Task.attempt GetRepos
 
 
 fileExtensions : List String
@@ -220,97 +263,75 @@ fileExtensions =
 
 getRouteDetails : String -> Model -> Cmd Msg
 getRouteDetails repoName model =
-    let
-        currentRepoSha =
-            model.repos
-                |> Repos.getRepo repoName
-                |> Maybe.map Repos.sha
-    in
-    case currentRepoSha of
-        Nothing ->
-            Cmd.none
+    model
+        |> (Tuple.second << .repos)
+        |> Repos.getRepo repoName
+        |> Maybe.map Repos.sha
+        |> Maybe.map
+            (\sha ->
+                (sha ++ "?recursive=1")
+                    |> (++) "https://api.github.com/repos/pwentz/dsa-practice/git/trees/"
+                    |> flip Http.get Decoders.repoFileDecoder
+                    |> Http.send RepoFiles
+            )
+        |> Maybe.withDefault Cmd.none
 
-        Just sha ->
-            let
-                url =
-                    "https://api.github.com/repos/pwentz/dsa-practice/git/trees/"
-                        ++ sha
-                        ++ "?recursive=1&client_id="
-                        ++ Secrets.githubClientId
-                        ++ "&client_secret="
-                        ++ Secrets.githubClientSecret
 
-                request =
-                    Http.get url Decoders.repoFileDecoder
-            in
-            Http.send RepoFiles request
+codeRequest : String -> Http.Request String
+codeRequest url =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Accept" "application/vnd.github.VERSION.raw" ]
+        , url =
+            url
+
+        -- ++ "?client_id="
+        -- ++ Secrets.githubClientId
+        -- ++ "&client_secret="
+        -- ++ Secrets.githubClientSecret
+        -- , headers = [ Http.header "Accept" "application/vnd.github.VERSION.html" ]
+        -- , url = "https://api.github.com/repos/pwentz/dsa-practice/contents/" ++ repoName ++ "/" ++ path
+        , body = Http.emptyBody
+        , expect = Http.expectStringResponse (Ok << .body)
+        , timeout = Nothing
+        , withCredentials = False
+        }
 
 
 fetchCode : Model -> Cmd Msg
 fetchCode model =
-    case model.currentRoute of
-        Home ->
-            Cmd.none
-
-        NotFound ->
-            Cmd.none
-
-        Algorithms repoName _ ->
-            let
-                toRequest url =
-                    Http.request
-                        { method = "GET"
-                        , headers = [ Http.header "Accept" "application/vnd.github.VERSION.raw" ]
-                        , url =
-                            url
-                                ++ "?client_id="
-                                ++ Secrets.githubClientId
-                                ++ "&client_secret="
-                                ++ Secrets.githubClientSecret
-
-                        -- , headers = [ Http.header "Accept" "application/vnd.github.VERSION.html" ]
-                        -- , url = "https://api.github.com/repos/pwentz/dsa-practice/contents/" ++ repoName ++ "/" ++ path
-                        , body = Http.emptyBody
-                        , expect = Http.expectStringResponse Ok
-                        , timeout = Nothing
-                        , withCredentials = False
-                        }
-
-                filesToFetch =
-                    model.repos
-                        |> Repos.getRepo repoName
-                        |> Maybe.map Repos.children
-                        |> Maybe.withDefault []
-            in
-            filesToFetch
-                |> List.map (Http.toTask << toRequest << .url)
+    let
+        fetch repoName =
+            model
+                |> (Tuple.second << .repos)
+                |> Repos.getRepo repoName
+                |> Maybe.map Repos.children
+                |> Maybe.withDefault []
+                |> List.map (Http.toTask << codeRequest << .url)
                 |> Task.sequence
                 |> Task.attempt RepoFilesCode
+    in
+    model
+        |> .currentRoute
+        |> algoRouteWithDefault fetch Cmd.none
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         NewAlgoUrl url ->
-            let
-                hasVisited =
-                    model.repos
-                        |> Repos.getRepo url
-                        |> Maybe.andThen (List.head << Repos.children)
-            in
-            case hasVisited of
-                Nothing ->
-                    ( model
-                    , Cmd.batch
+            model
+                |> (Tuple.second << .repos)
+                |> Repos.getRepo url
+                |> Maybe.andThen (List.head << Repos.children)
+                |> Maybe.map (\_ -> Navigation.newUrl url)
+                |> Maybe.withDefault
+                    (Cmd.batch
                         [ getRouteDetails url model
                         , Navigation.newUrl url
                         ]
                     )
-
-                Just _ ->
-                    ( model
-                    , Navigation.newUrl url
-                    )
+                |> (,) model
 
         NewUrl url ->
             ( model
@@ -334,8 +355,8 @@ update msg model =
         GetRepos (Err _) ->
             ( model, Cmd.none )
 
-        GetRepos (Ok repos) ->
-            ( { model | repos = Repos.fromList repos }, Cmd.none )
+        GetRepos (Ok ( readme, repos )) ->
+            ( { model | repos = ( readme, Repos.fromList repos ) }, Cmd.none )
 
         RepoFiles (Err _) ->
             ( model, Cmd.none )
@@ -359,12 +380,14 @@ update msg model =
                         updatedModel =
                             { model
                                 | repos =
-                                    model.repos
+                                    model
+                                        |> (Tuple.second << .repos)
                                         |> Repos.updateRepo repoName
                                             (Maybe.map <|
                                                 Repos.dropChildren dropWith
                                                     << Repos.addChildren files
                                             )
+                                        |> (,) ((Tuple.first << .repos) model)
                             }
                     in
                     ( updatedModel
@@ -385,12 +408,14 @@ update msg model =
                 Algorithms repoName _ ->
                     ( { model
                         | repos =
-                            model.repos
+                            model
+                                |> (Tuple.second << .repos)
                                 |> Repos.updateRepo repoName
                                     (Maybe.andThen <|
                                         Result.toMaybe
-                                            << Repos.addCodeToChildren (List.map .body responses)
+                                            << Repos.addCodeToChildren responses
                                     )
+                                |> (,) (Tuple.first model.repos)
                       }
                     , Cmd.none
                     )

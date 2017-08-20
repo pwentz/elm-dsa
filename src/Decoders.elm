@@ -1,21 +1,34 @@
 module Decoders exposing (..)
 
 import Json.Decode as Json
-import Json.Decode.Pipeline as JPipe
+import Readme exposing (Readme)
 import Regex
 import Repos exposing (Repo)
 import Result
 
 
-repoContentsDecoder : Json.Decoder (List Repo)
+type alias JsonReturn =
+    { path : String
+    , sha : String
+    , url : String
+    , format : String
+    }
+
+
+(&) : String -> Json.Decoder a -> Json.Decoder (a -> b) -> Json.Decoder b
+(&) key valueDecoder decoder =
+    Json.map2 (|>) (Json.field key valueDecoder) decoder
+
+
+repoContentsDecoder : Json.Decoder ( Maybe Readme, List Repo )
 repoContentsDecoder =
-    Json.map (List.filterMap Result.toMaybe)
+    Json.map decodeRepos
         (Json.list <|
-            (JPipe.decode Repos.initRepo
-                |> JPipe.required "path" Json.string
-                |> JPipe.required "sha" Json.string
-                |> JPipe.required "url" Json.string
-                |> JPipe.required "type" Json.string
+            (Json.succeed JsonReturn
+                |> (&) "path" Json.string
+                |> (&) "sha" Json.string
+                |> (&) "url" Json.string
+                |> (&) "type" Json.string
             )
         )
 
@@ -30,3 +43,21 @@ repoFileDecoder =
                 (Json.field "sha" Json.string)
                 (Json.field "url" Json.string)
                 (Json.field "type" Json.string)
+
+
+decodeRepos : List JsonReturn -> ( Maybe Readme, List Repo )
+decodeRepos repositoryData =
+    let
+        createRepo { path, sha, url, format } =
+            Repos.initRepo path sha url format
+
+        repos =
+            repositoryData
+                |> List.filterMap (Result.toMaybe << createRepo)
+
+        readMe =
+            repositoryData
+                |> List.filterMap (Readme.init << .url)
+                |> List.head
+    in
+    ( readMe, repos )

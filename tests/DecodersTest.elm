@@ -4,7 +4,6 @@ import Decoders exposing (..)
 import Expect exposing (Expectation)
 import Fuzz exposing (Fuzzer, int, list, string)
 import Json.Decode as Json
-import Json.Decode.Pipeline as JPipe
 import Repos
 import Test exposing (..)
 
@@ -73,6 +72,6 @@ suite =
                             Expect.fail msg
 
                         Ok res ->
-                            Expect.equal res (List.filterMap Result.toMaybe expected)
+                            Expect.equal (Tuple.second res) (List.filterMap Result.toMaybe expected)
             ]
         ]
