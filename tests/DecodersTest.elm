@@ -4,7 +4,7 @@ import Decoders exposing (..)
 import Expect exposing (Expectation)
 import Fuzz exposing (Fuzzer, int, list, string)
 import Json.Decode as Json
-import Json.Decode.Pipeline as JPipe
+import Repos
 import Test exposing (..)
 
 
@@ -55,26 +55,16 @@ suite =
                             Json.decodeString repoContentsDecoder contents
 
                         expected =
-                            [ { name = "Fibonacci"
-                              , path = "Fibonacci"
-                              , sha = "c6f3be5786009ea2"
-                              , size = 0
-                              , url = "https://api.github.com/repos/pwentz/dsa-practice/contents/Fibonacci?ref=master"
-                              , htmlUrl = "https://github.com/pwentz/dsa-practice/tree/master/Fibonacci"
-                              , gitUrl = "https://api.github.com/repos/pwentz/dsa-practice/git/trees/c6f3be5786009ea2"
-                              , downloadUrl = Nothing
-                              , typeOf = "dir"
-                              }
-                            , { name = "FloydWarshall"
-                              , path = "FloydWarshall"
-                              , sha = "c16add5071d04e532"
-                              , size = 0
-                              , url = "https://api.github.com/repos/pwentz/dsa-practice/contents/FloydWarshall?ref=master"
-                              , htmlUrl = "https://github.com/pwentz/dsa-practice/tree/master/FloydWarshall"
-                              , gitUrl = "https://api.github.com/repos/pwentz/dsa-practice/git/trees/c16add5071d04e532"
-                              , downloadUrl = Nothing
-                              , typeOf = "dir"
-                              }
+                            [ Repos.initRepo
+                                "Fibonacci"
+                                "c6f3be5786009ea2"
+                                "https://api.github.com/repos/pwentz/dsa-practice/contents/Fibonacci?ref=master"
+                                "dir"
+                            , Repos.initRepo
+                                "FloydWarshall"
+                                "c16add5071d04e532"
+                                "https://api.github.com/repos/pwentz/dsa-practice/contents/FloydWarshall?ref=master"
+                                "dir"
                             ]
                     in
                     case decodedOutput of
@@ -82,6 +72,6 @@ suite =
                             Expect.fail msg
 
                         Ok res ->
-                            Expect.equal res expected
+                            Expect.equal (Tuple.second res) (List.filterMap Result.toMaybe expected)
             ]
         ]
